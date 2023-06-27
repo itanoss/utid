@@ -17,7 +17,7 @@ impl SegmentSpec {
             SegmentSpec::Timestamp {
                 bits,
                 unit: _,
-                since_timestamp: _,
+                since_timestamp: _, // TODO More usability to combine this value
             } => bits,
             SegmentSpec::Random(bits) => bits,
             SegmentSpec::Constant(bits, _) => bits,
@@ -44,12 +44,12 @@ impl SegmentSpec {
     fn generate(&self) -> Result<u64, Error> {
         let candidate = match self {
             SegmentSpec::Timestamp {
-                bits,
+                bits: _,
                 unit,
                 since_timestamp,
             } => {
                 let now = OffsetDateTime::now_utc().unix_timestamp_nanos() as u64;
-                now - since_timestamp // TODO Support timestamp units
+                unit.from_nanos(now - since_timestamp)
             }
             SegmentSpec::Random(_) => {
                 let mut rng = rand::thread_rng();
@@ -58,6 +58,7 @@ impl SegmentSpec {
             SegmentSpec::Constant(_, value) => *value,
         };
 
+        println!("gen candidate: {}", candidate);
         if self.upper_bound() < candidate {
             Err(Error::OverflowError)
         } else {
@@ -158,5 +159,26 @@ mod tests {
             "Half random and Half constant: {}",
             utid.generate().unwrap()
         );
+    }
+
+    #[test]
+    fn complex() {
+        let epoch = Date::from_calendar_date(2023, time::Month::January, 1)
+            .unwrap()
+            .midnight()
+            .assume_utc()
+            .unix_timestamp_nanos() as u64;
+        let utid = Utid::new(vec![
+            SegmentSpec::Constant(2, 0),
+            SegmentSpec::Timestamp {
+                bits: 48,
+                unit: TimestampUnit::Milliseconds,
+                since_timestamp: epoch,
+            },
+            SegmentSpec::Constant(14, 1),
+        ]);
+        let generated = utid.generate().unwrap();
+        println!("Complex: {:#066b} ({})",
+            generated, generated);
     }
 }
