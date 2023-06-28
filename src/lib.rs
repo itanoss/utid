@@ -1,5 +1,7 @@
-use rand::{Rng, rngs::ThreadRng};
-use time::{Date, OffsetDateTime};
+use std::fmt;
+
+use rand::Rng;
+use time::{Date, Duration, OffsetDateTime};
 
 trait SpecSegment<T, R> {
     fn size(&self) -> u8;
@@ -30,13 +32,17 @@ impl SpecSegment<i128, OffsetDateTime> for TimestampSegment {
     }
 
     fn upper_bound(&self) -> OffsetDateTime {
-        let origin = self.unit.from_nano(self.since.unix_timestamp_nanos());
         let offset = if self.size == 128u8 {
             i128::MAX
         } else {
             (1 << self.size) - 1
         };
-        OffsetDateTime::from_unix_timestamp_nanos(origin + offset).unwrap() // TODO Cover overflow
+        let duration = Duration::new(
+            i64::try_from(self.unit.to_nano(offset) / 1_000_000_000).unwrap(),
+            i32::try_from(self.unit.to_nano(offset) % 1_000_000_000).unwrap(),
+            // TODO cover overflow
+        );
+        self.since + duration
     }
 
     fn encode(&self) -> Result<i128, Error> {
@@ -51,13 +57,24 @@ impl SpecSegment<i128, OffsetDateTime> for TimestampSegment {
     }
 }
 
+impl fmt::Display for TimestampSegment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TimestampSegment(since:{}, until:{})",
+            self.since,
+            self.upper_bound()
+        )
+    }
+}
+
 pub struct RandomSegment {
     size: u8,
 }
 
 impl RandomSegment {
     fn new(size: u8) -> Self {
-        Self { size, }
+        Self { size }
     }
 }
 
@@ -77,7 +94,6 @@ impl SpecSegment<i128, i128> for RandomSegment {
     fn encode(&self) -> Result<i128, Error> {
         let mut rng = rand::thread_rng();
         Ok(rng.gen_range(0..=self.upper_bound()))
-
     }
 
     fn decode(&self, encoded: i128) -> i128 {
@@ -92,10 +108,7 @@ pub struct ConstantSegment<T> {
 
 impl ConstantSegment<i128> {
     fn new(size: u8, value: i128) -> Self {
-        Self {
-            size,
-            value,
-        }
+        Self { size, value }
     }
 }
 
@@ -130,22 +143,25 @@ pub enum Error {
 pub enum TimestampUnit {
     Seconds,
     Milliseconds,
+    Microseconds,
     Nanoseconds,
 }
 
 impl TimestampUnit {
     fn from_nano(&self, nanos: i128) -> i128 {
         match self {
-            TimestampUnit::Seconds => nanos / 1000 / 1000,
-            TimestampUnit::Milliseconds => nanos / 1000,
+            TimestampUnit::Seconds => nanos / 1_000_000_000,
+            TimestampUnit::Milliseconds => nanos / 1_000_000,
+            TimestampUnit::Microseconds => nanos / 1_000,
             TimestampUnit::Nanoseconds => nanos,
         }
     }
 
     fn to_nano(&self, value: i128) -> i128 {
         match self {
-            TimestampUnit::Seconds => value * 1000 * 1000,
-            TimestampUnit::Milliseconds => value * 1000,
+            TimestampUnit::Seconds => value * 1_000_000_000,
+            TimestampUnit::Milliseconds => value * 1_000_000,
+            TimestampUnit::Microseconds => value * 1_000,
             TimestampUnit::Nanoseconds => value,
         }
     }
@@ -158,15 +174,28 @@ pub struct Spec2<T, R1, R2> {
     segments: (Box<dyn SpecSegment<T, R1>>, Box<dyn SpecSegment<T, R2>>),
 }
 pub struct Spec3<T, R1, R2, R3> {
-    segments: (Box<dyn SpecSegment<T, R1>>, Box<dyn SpecSegment<T, R2>>, Box<dyn SpecSegment<T, R3>>),
+    segments: (
+        Box<dyn SpecSegment<T, R1>>,
+        Box<dyn SpecSegment<T, R2>>,
+        Box<dyn SpecSegment<T, R3>>,
+    ),
 }
 pub struct Spec4<T, R1, R2, R3, R4> {
-    segments: (Box<dyn SpecSegment<T, R1>>, Box<dyn SpecSegment<T, R2>>, Box<dyn SpecSegment<T, R3>>, Box<dyn SpecSegment<T, R4>>),
+    segments: (
+        Box<dyn SpecSegment<T, R1>>,
+        Box<dyn SpecSegment<T, R2>>,
+        Box<dyn SpecSegment<T, R3>>,
+        Box<dyn SpecSegment<T, R4>>,
+    ),
 }
 
 impl<R> Spec<i128, R> {
     fn generate(&self) -> Result<i128, Error> {
         self.segment.encode()
+    }
+
+    fn decompose(&self, generated: i128) -> Result<R, Error> {
+        Ok(self.segment.decode(generated))
     }
 }
 
@@ -189,7 +218,12 @@ mod tests {
         let spec = Spec {
             segment: Box::new(ConstantSegment::new(128, 12345)),
         };
-        assert_eq!(12345, spec.generate().unwrap());
+
+        let generated = spec.generate().unwrap();
+        assert_eq!(12345, generated);
+
+        let constant = spec.decompose(generated).unwrap();
+        assert_eq!(12345, constant);
     }
 
     #[test]
@@ -197,7 +231,36 @@ mod tests {
         let spec = Spec {
             segment: Box::new(RandomSegment::new(128)),
         };
-        println!("Full bits of random: {}", spec.generate().unwrap());
+
+        let generated = spec.generate().unwrap();
+
+        let random_number = spec.decompose(generated).unwrap();
+        assert_eq!(generated, random_number);
+        println!("Full bits of random: {}", generated);
     }
 
+    #[test]
+    fn entire_timestamp() {
+        let spec = Spec {
+            segment: Box::new(TimestampSegment::new_with_utc_midnight(
+                128,
+                TimestampUnit::Nanoseconds,
+                Date::from_calendar_date(2023, time::Month::January, 1).unwrap(),
+            )),
+        };
+        let generated = spec.generate().unwrap();
+
+        let timestamp = spec.decompose(generated).unwrap();
+        println!("Full bits of timestamp: {} ({})", generated, timestamp);
+    }
+
+    #[test]
+    fn segment_display() {
+        let segment = TimestampSegment::new_with_utc_midnight(
+            52,
+            TimestampUnit::Microseconds,
+            Date::from_calendar_date(2023, time::Month::January, 1).unwrap(),
+        );
+        println!("timestamp segment: {}", segment);
+    }
 }
