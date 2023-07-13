@@ -3,7 +3,7 @@ use std::fmt;
 use rand::Rng;
 use time::{Date, Duration, OffsetDateTime};
 
-trait SpecSegment<T, R> {
+pub trait SpecSegment<T, R> {
     fn size(&self) -> u8;
     fn upper_bound(&self) -> R;
     fn encode(&self) -> Result<T, Error>;
@@ -73,7 +73,8 @@ pub struct RandomSegment {
 }
 
 impl RandomSegment {
-    fn new(size: u8) -> Self {
+    // TODO Consider this public modifier is needed
+    pub fn new(size: u8) -> Self {
         Self { size }
     }
 }
@@ -107,7 +108,7 @@ pub struct ConstantSegment<T> {
 }
 
 impl ConstantSegment<i128> {
-    fn new(size: u8, value: i128) -> Self {
+    pub fn new(size: u8, value: i128) -> Self {
         Self { size, value }
     }
 }
@@ -168,13 +169,14 @@ impl TimestampUnit {
 }
 
 pub struct Spec<T, R> {
-    segment: Box<dyn SpecSegment<T, R>>,
+    // TODO Remove pub modifier
+    pub segment: Box<dyn SpecSegment<T, R>>,
 }
 pub struct Spec2<T, R1, R2> {
-    segments: (Box<dyn SpecSegment<T, R1>>, Box<dyn SpecSegment<T, R2>>),
+    pub segments: (Box<dyn SpecSegment<T, R1>>, Box<dyn SpecSegment<T, R2>>),
 }
 pub struct Spec3<T, R1, R2, R3> {
-    segments: (
+    pub segments: (
         Box<dyn SpecSegment<T, R1>>,
         Box<dyn SpecSegment<T, R2>>,
         Box<dyn SpecSegment<T, R3>>,
@@ -204,6 +206,15 @@ impl<R1, R2> Spec2<i128, R1, R2> {
         let mut result = self.segments.1.encode()?;
         result |= self.segments.0.encode()? << self.segments.1.size();
         Ok(result)
+    }
+
+    fn decompose(&self, generated: i128) -> Result<(R1, R2), Error> {
+        let second = (1i128 << self.segments.1.size()) - 1;
+        let second = self.segments.1.decode(second);
+
+        let first = generated >> self.segments.1.size();
+        let first = self.segments.0.decode(first);
+        Ok((first, second))
     }
 }
 
@@ -262,5 +273,18 @@ mod tests {
             Date::from_calendar_date(2023, time::Month::January, 1).unwrap(),
         );
         println!("timestamp segment: {}", segment);
+    }
+
+    #[test]
+    fn constant_and_random() {
+        let spec = Spec2 {
+            segments: (
+                Box::new(ConstantSegment::new(48, 12345)),
+                Box::new(RandomSegment::new(80)),
+            ),
+        };
+        let generated = spec.generate().unwrap();
+        let (constant, random) = spec.decompose(generated).unwrap();
+        println!("Constant: {}, random: {}", constant, random);
     }
 }
