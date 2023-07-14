@@ -167,9 +167,9 @@ impl TimestampUnit {
         }
     }
 }
-
+// TODO Consider macro generation to support up to 8 segments
 pub struct Spec<T, R> {
-    // TODO Remove pub modifier
+    // TODO Check if removing pub modifier is possible
     pub segment: Box<dyn SpecSegment<T, R>>,
 }
 pub struct Spec2<T, R1, R2> {
@@ -183,7 +183,7 @@ pub struct Spec3<T, R1, R2, R3> {
     ),
 }
 pub struct Spec4<T, R1, R2, R3, R4> {
-    segments: (
+    pub segments: (
         Box<dyn SpecSegment<T, R1>>,
         Box<dyn SpecSegment<T, R2>>,
         Box<dyn SpecSegment<T, R3>>,
@@ -192,29 +192,88 @@ pub struct Spec4<T, R1, R2, R3, R4> {
 }
 
 impl<R> Spec<i128, R> {
-    fn generate(&self) -> Result<i128, Error> {
+    pub fn generate(&self) -> Result<i128, Error> {
         self.segment.encode()
     }
 
-    fn decompose(&self, generated: i128) -> Result<R, Error> {
+    pub fn decompose(&self, generated: i128) -> Result<R, Error> {
         Ok(self.segment.decode(generated))
     }
 }
 
 impl<R1, R2> Spec2<i128, R1, R2> {
-    fn generate(&self) -> Result<i128, Error> {
+    pub fn generate(&self) -> Result<i128, Error> {
         let mut result = self.segments.1.encode()?;
         result |= self.segments.0.encode()? << self.segments.1.size();
         Ok(result)
     }
 
-    fn decompose(&self, generated: i128) -> Result<(R1, R2), Error> {
-        let second = (1i128 << self.segments.1.size()) - 1;
+    pub fn decompose(&self, generated: i128) -> Result<(R1, R2), Error> {
+        let second = ((1i128 << self.segments.1.size()) - 1) & generated;
         let second = self.segments.1.decode(second);
 
-        let first = generated >> self.segments.1.size();
+        let first = ((generated as u128) >> self.segments.1.size()) as i128;
         let first = self.segments.0.decode(first);
         Ok((first, second))
+    }
+}
+
+impl<R1, R2, R3> Spec3<i128, R1, R2, R3> {
+    pub fn generate(&self) -> Result<i128, Error> {
+        let mut result = self.segments.2.encode()?;
+        let mut shift = self.segments.2.size();
+        result |= self.segments.1.encode()? << shift;
+        shift += self.segments.1.size();
+
+        result |= self.segments.0.encode()? << shift;
+        Ok(result)
+    }
+
+    pub fn decompose(&self, generated: i128) -> Result<(R1, R2, R3), Error> {
+        let third = ((1i128 << self.segments.2.size()) - 1) & generated;
+        let third = self.segments.2.decode(third);
+        let mut shift = self.segments.2.size();
+        
+        let second = (((1i128 << (self.segments.1.size() + shift)) - 1) & generated) >> shift;
+        let second = self.segments.1.decode(second);
+        shift += self.segments.1.size();
+
+        let first = generated >> shift;
+        let first = self.segments.0.decode(first);
+        Ok((first, second, third))
+    }
+}
+
+impl<R1, R2, R3, R4> Spec4<i128, R1, R2, R3, R4> {
+    pub fn generate(&self) -> Result<i128, Error> {
+        let mut result = self.segments.3.encode()?;
+        let mut shift = self.segments.3.size();
+        result |= self.segments.2.encode()? << shift;
+        shift += self.segments.2.size();
+
+        result |= self.segments.1.encode()? << shift;
+        shift += self.segments.1.size();
+
+        result |= self.segments.0.encode()? << shift;
+        Ok(result)
+    }
+
+    pub fn decompose(&self, generated: i128) -> Result<(R1, R2, R3, R4), Error> {
+        let fourth = ((1i128 << self.segments.3.size()) - 1) & generated;
+        let fourth = self.segments.3.decode(fourth);
+        let mut shift = self.segments.3.size();
+
+        let third = (((1i128 << (self.segments.2.size() + shift)) - 1) & generated) >> shift;
+        let third = self.segments.2.decode(third);
+        shift += self.segments.2.size();
+
+        let second = (((1i128 << (self.segments.1.size() + shift)) - 1) & generated) >> shift;
+        let second = self.segments.1.decode(second);
+        shift += self.segments.1.size();
+
+        let first = generated >> shift;
+        let first = self.segments.0.decode(first);
+        Ok((first, second, third, fourth))
     }
 }
 
