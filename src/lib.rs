@@ -17,7 +17,7 @@ pub struct TimestampSegment {
 }
 
 impl TimestampSegment {
-    fn new_with_utc_midnight(size: u8, unit: TimestampUnit, since: Date) -> Self {
+    pub fn new_with_utc_midnight(size: u8, unit: TimestampUnit, since: Date) -> Self {
         Self {
             size,
             unit,
